@@ -1,0 +1,12 @@
+INPUT_DIRNAME: "/Users/brank/workspace/RecurrentSourceFilterModel/data/my_extracted"
+
+OUTPUT_DIRNAME: "/Users/brank/workspace/RecurrentSourceFilterModel/data/my_output"
+
+SAMPLING_PARAMETER:
+    window_msec: 25
+    phrase_msec: 10
+
+TRAINING_PARAMETER:
+    epoch     : 10
+    batch_size: 8
+    hidden_size: 50
