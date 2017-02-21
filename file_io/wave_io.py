@@ -3,8 +3,7 @@
 import os
 import random
 import numpy as np
-from scipy.io.wavfile import read
-from scipy.io.wavfile import write
+from scipy.io import wavfile
 from scipy import signal
 
 
@@ -49,7 +48,39 @@ class Wave(object):
 
 class WaveInput(object):
     def __init__(self, settings, num_file='all'):
-        def batch_generator(input_waves, _batch_size):
+        self.settings = settings
+        self.input_dirname = self.settings["INPUT_DIRNAME"]
+        self.num_file = num_file
+        self.input_waves = []
+        if self.num_file is not None:
+            filenames = os.listdir(self.input_dirname)
+            len_filenames = len(filenames)
+            if self.num_file == 'all':
+                self.num_file = len_filenames
+            if self.num_file > len_filenames:
+                raise ValueError(
+                    "too many num_file ({0} > {1})".format(self.num_file, len_filenames)
+                )
+
+            random.shuffle(filenames)
+            self.input_waves = self.read_waves(filenames[:self.num_file])
+
+    def read_waves(self, filepathes):
+        if not isinstance(filepathes, list):
+            filepathes = [filepathes]
+        input_waves = [self.read(filepath) for filepath in filepathes]
+        return input_waves
+
+    @staticmethod
+    def read(filepath):
+        rate, data = wavfile.read(filepath)
+        return Wave(filename=os.path.basename(filepath), rate=rate, data=data)
+
+    @staticmethod
+    def make_batch(input_waves, batch_size):
+        len_input_waves = len(input_waves)
+
+        def batch_generator(_batch_size):
             batch = []
             for input_file in input_waves:
                 batch.append(input_file)
@@ -59,60 +90,13 @@ class WaveInput(object):
             for _ in range(_batch_size - len(batch)):
                 batch.append(random.choice(input_waves))
             yield batch
-
-        self.settings = settings
-        self.input_dirname = self.settings["INPUT_DIRNAME"]
-        filenames = os.listdir(self.input_dirname)
-        len_filenames = len(filenames)
-        if num_file == 'all':
-            num_file = len_filenames
-        if num_file > len_filenames:
+        # keras先生がバッチ処理やってくれるっぽいけど...
+        if batch_size > len_input_waves:
             raise ValueError(
-                "too many num_file ({0} > {1})".format(num_file, len_filenames)
+                "batch_size is larger than #data ({0} > {1})".format(batch_size, len_input_waves)
             )
-
-        sampling_params = self.settings["SAMPLING_PARAMETER"]
-        window_msec = sampling_params["window_msec"]
-        phrase_msec = sampling_params["phrase_msec"]
-        if phrase_msec < window_msec / 2:
-            raise ValueError("phrase_msec must be larger than half of window_msec")
-
-        self.input_waves = []
-        random.shuffle(filenames)
-        for filename in filenames[:num_file]:
-            filepath = self.input_dirname + '/' + filename
-            rate, data = read(filepath)
-            window_size = int((window_msec / 1000.) * rate)
-            phrase_size = int((phrase_msec / 1000.) * rate)
-            waves = self.__cut_waves(data, window_size, phrase_size)
-            self.input_waves.append(
-                Wave(filename=filename, rate=rate, data=waves)
-            )
-        """
-        # keras先生がバッチ処理やってくれるっぽい
-        batch_size = self.settings["TRAINING_PARAMETER"]["batch_size"]
-        if batch_size > len_filenames:
-            raise ValueError(
-                "batch_size is larger than #data ({0} > {1})".format(batch_size, len_filenames)
-            )
-        self.batches = [
-            x for x in batch_generator(self.input_waves, batch_size)
-        ]
-        """
-
-    @staticmethod
-    def __cut_waves(data, window_size, phrase_size):  # ハニング窓をかけて短時間ごとに切り分ける
-        cuts = []
-        size = data.shape[0]
-        pad_size = phrase_size - (size - window_size) % phrase_size
-        if pad_size < phrase_size:
-            data = np.r_[data, np.zeros(pad_size)]
-        hann = signal.hann(window_size)
-        n0 = 0
-        while n0 <= size - window_size:
-            cuts.append(hann * data[n0:n0+window_size])
-            n0 += phrase_size
-        return cuts
+        batches = [x for x in batch_generator(batch_size)]
+        return batches
 
 
 class WaveOutput(object):
@@ -126,33 +110,14 @@ class WaveOutput(object):
             for filename in filenames:
                 os.remove(self.output_dirname + "/" + filename)
 
-    def write(self, output_waves):
+    def write_waves(self, output_waves):
+        if not isinstance(output_waves, list):
+            output_waves = [output_waves]
         for output_wave in output_waves:
-            filepath = self.output_dirname + "/" + output_wave.filename
-            concat = self.__concat_waves(output_wave)
-            write(filepath, output_wave.rate, concat)
+            self.write(output_wave, self.output_dirname)
 
-    def __concat_waves(self, wave):  # 逆ハニング窓をかけて結合
-        def mean_overlap(_data0, _data1):
-            pad = np.zeros(phrase_size)
-            _data0 = _data0 / hann
-            _data1 = _data1 / hann
-            _data0 = np.r_[_data0, pad]
-            _data1 = np.r_[pad, _data1]
-            return ((_data0 + _data1) / 2.)[:window_size]
-        data = wave.data
-        rate = wave.rate
-        window_size = data[0].shape[0]
-        concat = None
-        sampling_params = self.settings["SAMPLING_PARAMETER"]
-        phrase_msec = sampling_params["phrase_msec"]
-        phrase_size = int((phrase_msec / 1000.) * rate)
-        hann = signal.hann(window_size)        
-        for data0, data1 in zip(data, data[1:]):
-            wave = mean_overlap(data0, data1)
-            if concat is None:
-                concat = wave
-            else:
-                concat = np.r_[concat, wave]
-        concat = np.r_[concat, data[-1][phrase_size:]]
-        return concat
+    @staticmethod
+    def write(wave, dirname):
+        assert isinstance(wave, Wave)
+        filepath = dirname + "/" + wave.filename
+        wavfile.write(filepath, wave.rate, wave.data)

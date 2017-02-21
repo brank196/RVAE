@@ -1,2 +1,1 @@
-# RVAE
-Recurrent Variational Auto-Encoder
+# Recurrent Source Filter Model
